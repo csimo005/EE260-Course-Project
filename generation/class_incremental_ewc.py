@@ -75,13 +75,11 @@ def collate(samples):
     return img, lbl
 
 def VAE_loss(x, reconstructed_x, mean, log_var):
-    # reconstruction loss
     RCL = F.binary_cross_entropy(reconstructed_x, x, reduction='sum')
     # kl divergence loss
     KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
 
     return RCL + KLD
-
 
 def main(epochs, batch_sz,  lr, device):
     ## Get full MNIST dataset
