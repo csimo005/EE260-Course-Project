@@ -81,3 +81,6 @@ class EWC(object):
             _loss = self._precision_matrices[n] * (p - self._means[n]) ** 2
             loss += _loss.sum()
         return loss
+
+    def __call__(self, model: nn.Module):
+        return self.penalty(model)

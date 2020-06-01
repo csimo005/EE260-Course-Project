@@ -85,8 +85,6 @@ class CVAE(nn.Module):
         self.decoder = Decoder(latent_dim, hidden_dim, input_dim, n_classes)
 
     def forward(self, x, y):
-
-        #print(x.shape, y.shape)
         x = torch.cat((x, y), dim=1)
         # encode
         z_mu, z_var = self.encoder(x)
