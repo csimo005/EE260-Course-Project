@@ -18,7 +18,7 @@ path = 'data'
 data = load_data(path, file_dict)
 
 BATCH_SIZE = 1
-EPOCH = 1
+EPOCH = 5
 LR = 1e-3
 
 mnist_full_tr = mnist_dataset(data, train=True)
@@ -128,10 +128,7 @@ for t in range(5):
 	    data = data.type(torch.FloatTensor).cuda()
 	    reconstructed_x, _, _ = model(data, target)
 	    reconstructed_x = reconstructed_x.view(28, 28).cpu().data
-	    reconstructed_x = (reconstructed_x.cpu().detach().numpy().astype(np.uint8))
-	    im = Image.fromarray(reconstructed_x)
-	    im = im.convert("L")
-	    im.save("{}_{}.png".format(str(name), str(i)))
+	    matplotlib.image.imsave('test_{}_{}.png'.format(str(name), str(i)), reconstructed_x, cmap = 'gray')
 	    
 
 for l in range(1000):
@@ -143,7 +140,7 @@ for l in range(1000):
     z = torch.cat((z, y), dim=1)
     reconstructed_img = model.decoder(z)
     img = reconstructed_img.view(28, 28).cpu().data
-    matplotlib.image.imsave('new_{}_{}.png'.format(str(label), str(l)), array)
+    matplotlib.image.imsave('new_{}_{}.png'.format(str(real_label), str(l)), img, cmap = 'gray')
     #plt.figure()
     #plt.imshow(img, cmap='gray')
     #plt.show()
