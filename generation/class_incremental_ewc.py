@@ -1,9 +1,11 @@
 import torch
+import torchvision
+import torchvision.transforms as tranforms
 import random
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from ewc import EWC
 import numpy as np
 from dataset import *
@@ -49,11 +51,11 @@ def test(model, testloader, save_prefix, device):
 
         with torch.no_grad():
             reconstructed_x, _, _ = model(data, target)
-        reconstructed_x = reconstructed_x.view(-1, 28, 28).cpu().numpy()
+        reconstructed_x = reconstructed_x.cpu().numpy()
         reconstructed_x = (reconstructed_x*255).astype(np.uint8)
 
         for j in range(reconstructed_x.shape[0]):
-            im = Image.fromarray(reconstructed_x[j])
+            im = Image.fromarray(reconstructed_x[j,0])
             im = im.convert("L")
             im.save(save_prefix + "{}_{}.png".format(str(name[j].item()), str(i*data.shape[0]+j)))
     return
@@ -70,8 +72,8 @@ def collate(samples):
     lbl = torch.zeros(len(samples), 10)
 
     for i in range(len(samples)):
-        img[i] = torch.tensor(samples[0][0], dtype=torch.float32)
-        lbl[i, samples[0][1]] = 1
+        img[i] = samples[i][0]
+        lbl[i, samples[i][1]] = 1
     return img, lbl
 
 def VAE_loss(x, reconstructed_x, mean, log_var):
@@ -81,50 +83,49 @@ def VAE_loss(x, reconstructed_x, mean, log_var):
 
     return RCL + KLD
 
+def create_tasks(trainset, testset, batch_sz, valid=0.1):
+    train_idx = [np.zeros((0,), dtype=np.uint32) for i in range(10)]
+    for i in range(len(trainset)):
+        train_idx[trainset.targets[i]] = np.append(train_idx[trainset.targets[i]], [i])
+    for i in range(10):
+        np.random.shuffle(train_idx[i])
+
+    test_idx = [np.zeros((0,), dtype=np.uint32) for i in range(10)]
+    for i in range(len(testset)):
+        test_idx[testset.targets[i]] = np.append(test_idx[testset.targets[i]], [i])
+
+    trainloader = [None]*5
+    validloader = [None]*5
+    for i in range(5):
+        trainloader[i] = DataLoader(Subset(trainset, np.concatenate((train_idx[2*i][int(train_idx[2*i].shape[0]*valid):],
+                                                                     train_idx[2*i+1][int(train_idx[2*i+1].shape[0]*valid):]))), 
+                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
+        validloader[i] = DataLoader(Subset(trainset, np.concatenate((train_idx[2*i][:int(train_idx[2*i].shape[0]*valid)],
+                                                                     train_idx[2*i+1][:int(train_idx[2*i+1].shape[0]*valid)]))), 
+                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
+
+    testloader = [None]*5
+    for i in range(5):
+        testloader[i] = DataLoader(Subset(testset, np.concatenate(tuple([test_idx[j] for j in range((i+1)*2)]))),
+                                   batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
+
+    return trainloader, validloader, testloader
+
 def main(epochs, batch_sz,  lr, device):
-    ## Get full MNIST dataset
-    file_dict = {'train':['train-images-idx3-ubyte.gz', 'train-labels-idx1-ubyte.gz'], 
-    'test':['t10k-images-idx3-ubyte.gz', 't10k-labels-idx1-ubyte.gz']}
-    path = 'data'
-    data = load_data(path, file_dict)
-    
     BATCH_SIZE = batch_sz
     EPOCH = epochs
     LR = lr
-    
-    mnist_full_tr = mnist_dataset(data, train=True)
-    mnist_full_te = mnist_dataset(data, train=False)
-    
-    tasks = {}
-    for i in range(5):
-        tasks[i+1] = [x for x in range(2*i,2*i+2)]
-    
-    active_cl = {}
-    for i in range(5):
-        active_cl[i+1] = []
-        for j in range(i+1):
-            active_cl[i+1].extend(tasks[j+1])
-    
-    task_masks = {}
-    for i in range(5):
-        task_masks[i+1] = torch.LongTensor([x for x in range(2*i+2,10)])
-    
-    trainloaders = {}
-    for i in range(5):
-        task_data = get_task_dataset(tasks[i+1], mnist_full_tr)
-        trainloaders[i+1] = DataLoader(task_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
-    
-    testloaders = {}
-    for i in range(5):
-        task_data = get_task_dataset(active_cl[i+1], mnist_full_te)
-        testloaders[i+1] = DataLoader(task_data, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate)
-    
-    
     
     INPUT_DIM = 28 * 28     # size of each input
     HIDDEN_DIM = 256        # hidden dimension
     LATENT_DIM = 75         # latent vector dimension
     N_CLASSES = 10          # number of classes in the data
+
+    transform = transforms.Compose([transforms.ToTensor()])
+    trainset = torchvision.datasets.MNIST('./', train=True, transform=transform, download=True)
+    testset = torchvision.datasets.MNIST('./', train=False, transform=transform, download=True)
+    trainloader, validloader, testloader = create_tasks(trainset, testset, BATCH_SIZE, valid=0.1)
+
     model = CVAE(INPUT_DIM, HIDDEN_DIM, LATENT_DIM, N_CLASSES)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=LR)
@@ -132,25 +133,21 @@ def main(epochs, batch_sz,  lr, device):
     # Train on tasks sequentially
     WEIGHT = 5
     ewc = None
+    old_task = []
     for t in range(5):
-        trainloader = trainloaders[t+1]
-        testloader = testloaders[t+1]
-        active_classes = active_cl[t+1]
-        mask = task_masks[t+1]
-
         # Train loop for task t
         print('Training on task %d ....'%(t+1))
         for epoch in range(EPOCH):
-            train(model, optimizer, VAE_loss, trainloader, epoch, device, ewc, WEIGHT)
+            train(model, optimizer, VAE_loss, trainloader[t], epoch, device, ewc, WEIGHT)
         if not os.path.exists('task_%d_recon/' % (t+1)):
             os.mkdir('task_%d_recon/' % (t+1))
-        test(model, testloader, 'task_%d_recon/' % (t+1), device)
+        test(model, testloader[t], 'task_%d_recon/' % (t+1), device)
 
         # Get EWC agent
-        sample_idx = random.sample(range(len(trainloader.dataset)), 200)
+        sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
         old_task = []
         for idx in sample_idx:
-            old_task.append(trainloader.dataset[idx])
+            old_task.append(validloader[t].dataset[idx])
         ewc = EWC(model, old_task)
     
     
@@ -166,8 +163,9 @@ def main(epochs, batch_sz,  lr, device):
         z = torch.cat((z, y), dim=1)
         with torch.no_grad():
             reconstructed_img = model.decoder(z)
-        reconstructed_img = reconstructed_img.view(-1,28,28).cpu().numpy()
+        reconstructed_img = reconstructed_img.cpu().numpy()
         reconstructed_img = (reconstructed_img*255).astype(np.uint8)
+        reconstructed_img = np.reshape(reconstructed_img, (-1,28,28))
 
         for j in range(reconstructed_img.shape[0]):
             im = Image.fromarray(reconstructed_img[j])
