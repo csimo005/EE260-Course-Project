@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from ewc import EWC
 import numpy as np
 from dataset import *
+from mhe import *
 
 ## Get full MNIST dataset
 file_dict = {'train':['train-images-idx3-ubyte.gz', 'train-labels-idx1-ubyte.gz'], 
@@ -49,9 +50,9 @@ for i in range(5):
 class mlp(nn.Module):	
 	def __init__(self):
 		super(mlp, self).__init__()
-		self.fc_1 = nn.Linear(784, 400)
-		self.fc_2 = nn.Linear(400, 400)
-		self.fc_3 = nn.Linear(400, 10)
+		self.fc_1 = nn.Linear(784, 100, bias=False)
+		self.fc_2 = nn.Linear(100, 100, bias=False)
+		self.fc_3 = nn.Linear(100, 10, bias=False)
 
 	def forward(self, x):
 		x = F.relu(self.fc_1(x))
@@ -89,7 +90,7 @@ for t in range(5):
 			if t == 0:
 				loss = criterion(output, target.long())
 			else:
-				loss = criterion(output, target.long()) + WEIGHT*ewc.penalty(model)
+				loss = criterion(output, target.long()) + WEIGHT*ewc.penalty_1(model) + ewc.penalty_2(model, s=2)
 			running_loss += loss.item()
 			loss.backward()
 			model.fc_3.weight.grad[mask] = 0
