@@ -6,13 +6,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
-from ewc import EWC
+from ewc2 import EWC
 import numpy as np
 from dataset import *
 from gen_model import *
 import matplotlib
 from PIL import Image
 import copy
+
+from skimage.metrics import structural_similarity as SSIM
+from skimage.metrics import peak_signal_noise_ratio as PSNR
+
 
 def train(model, optimizer, criterion, trainloader, epoch, device, regularizer=None, lmbda=0):
     model.train()
@@ -42,8 +46,12 @@ def train(model, optimizer, criterion, trainloader, epoch, device, regularizer=N
             print("Training [%d, %d] Loss: %.4f" % (epoch+1, (batch_idx+1)*data.shape[0], running_loss/print_it))
     return
     
-def test(model, testloader, save_prefix, device):
+def test(model, testloader, save_prefix, learned, testing, device):
     model.eval()
+
+    psnr = 0.
+    ssim = 0.
+
     for i, (data, target) in enumerate(testloader):
         name = target.topk(1)[1]
         data = data.to(device)
@@ -53,11 +61,18 @@ def test(model, testloader, save_prefix, device):
             reconstructed_x, _, _ = model(data, target)
         reconstructed_x = reconstructed_x.cpu().numpy()
         reconstructed_x = (reconstructed_x*255).astype(np.uint8)
+        original_x = (data.cpu().numpy()*255).astype(np.uint8)
 
         for j in range(reconstructed_x.shape[0]):
+            psnr += PSNR(original_x[j,0], reconstructed_x[j,0])
+            ssim += SSIM(original_x[j,0], reconstructed_x[j,0])
             im = Image.fromarray(reconstructed_x[j,0])
             im = im.convert("L")
             im.save(save_prefix + "{}_{}.png".format(str(name[j].item()), str(i*data.shape[0]+j)))
+
+    psnr = psnr/len(testloader)
+    ssim = ssim/len(testloader)
+    print('[%d, %d] PSNR: %.4f, SSIM %.4f' % (learned, testing, psnr, ssim))
     return
 
 def idx2onehot(y, N_CLASSES):
@@ -106,7 +121,7 @@ def create_tasks(trainset, testset, batch_sz, valid=0.1):
 
     testloader = [None]*5
     for i in range(5):
-        testloader[i] = DataLoader(Subset(testset, np.concatenate(tuple([test_idx[j] for j in range((i+1)*2)]))),
+        testloader[i] = DataLoader(Subset(testset, np.concatenate(tuple([test_idx[j] for j in range(i*2,(i+1)*2)]))),
                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
 
     return trainloader, validloader, testloader
@@ -132,27 +147,31 @@ def main(epochs, batch_sz,  lr, device):
     
     # Train on tasks sequentially
     WEIGHT = 5
-    ewc = None
+    regularizer = None 
     old_task = []
     for t in range(5):
         # Train loop for task t
         print('Training on task %d ....'%(t+1))
         for epoch in range(EPOCH):
-            train(model, optimizer, VAE_loss, trainloader[t], epoch, device, ewc, WEIGHT)
-        if not os.path.exists('task_%d_recon/' % (t+1)):
-            os.mkdir('task_%d_recon/' % (t+1))
-        test(model, testloader[t], 'task_%d_recon/' % (t+1), device)
+            train(model, optimizer, VAE_loss, trainloader[t], epoch, device, regularizer, WEIGHT)
+
+        for i in range(t+1):
+            output_path = 'output_images/task_%d/task_%d' % (t+1,i+1)
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
+            test(model, testloader[t], output_path, t, i, device)
 
         # Get EWC agent
         sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
         old_task = []
         for idx in sample_idx:
             old_task.append(validloader[t].dataset[idx])
-        ewc = EWC(model, old_task)
+        reg = EWC(model, old_task)
+        regularizer = lambda m: reg(m, 2)
     
     
-    if not os.path.exists('generated_images/'):
-        os.mkdir('generated_images/')
+    if not os.path.exists('output_images/generated_images/'):
+        os.makedirs('output_images/generated_images/')
 
     model.eval()
     for c in range(10):
@@ -173,4 +192,4 @@ def main(epochs, batch_sz,  lr, device):
             im.save("generated_images/{}_{}.png".format(str(c), str(j)))
         
 if __name__ == '__main__':
-    main(25, 100, 1e-3, 'cuda:0')
+    main(5, 100, 1e-3, 'cuda:0')
