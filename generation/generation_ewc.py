@@ -99,33 +99,29 @@ def VAE_loss(x, reconstructed_x, mean, log_var):
 
     return RCL + KLD
 
-def create_tasks(trainset, testset, batch_sz, valid=0.1):
+def create_tasks(trainset, testset, batch_sz):
     train_idx = [np.zeros((0,), dtype=np.uint32) for i in range(10)]
     for i in range(len(trainset)):
         train_idx[trainset.targets[i]] = np.append(train_idx[trainset.targets[i]], [i])
-    for i in range(10):
-        np.random.shuffle(train_idx[i])
 
     test_idx = [np.zeros((0,), dtype=np.uint32) for i in range(10)]
     for i in range(len(testset)):
         test_idx[testset.targets[i]] = np.append(test_idx[testset.targets[i]], [i])
 
-    trainloader = [None]*5
-    validloader = [None]*5
-    for i in range(5):
-        trainloader[i] = DataLoader(Subset(trainset, np.concatenate((train_idx[2*i][int(train_idx[2*i].shape[0]*valid):],
-                                                                     train_idx[2*i+1][int(train_idx[2*i+1].shape[0]*valid):]))), 
+    trainloader = [None]*2
+    testloader = [None]*2
+    for i in range(2):
+        train_id = np.zeros((0,), dtype=np.uint32)
+        test_id = np.zeros((0,), dtype=np.uint32)
+        for j in range(5):
+            train_id = np.concatenate((train_id, train_idx[i*5+j]))
+            test_id = np.concatenate((test_id, test_idx[i*5+j]))
+        trainloader[i] = DataLoader(Subset(trainset, train_id), 
                                     batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
-        validloader[i] = DataLoader(Subset(trainset, np.concatenate((train_idx[2*i][:int(train_idx[2*i].shape[0]*valid)],
-                                                                     train_idx[2*i+1][:int(train_idx[2*i+1].shape[0]*valid)]))), 
-                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
-
-    testloader = [None]*5
-    for i in range(5):
         testloader[i] = DataLoader(Subset(testset, np.concatenate(tuple([test_idx[j] for j in range(i*2,(i+1)*2)]))),
                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
 
-    return trainloader, validloader, testloader
+    return trainloader, testloader
 
 def main(epochs, batch_sz,  lr, device, prefix):
     BATCH_SIZE = batch_sz
@@ -140,7 +136,7 @@ def main(epochs, batch_sz,  lr, device, prefix):
     transform = transforms.Compose([transforms.ToTensor()])
     trainset = torchvision.datasets.MNIST('./', train=True, transform=transform, download=True)
     testset = torchvision.datasets.MNIST('./', train=False, transform=transform, download=True)
-    trainloader, validloader, testloader = create_tasks(trainset, testset, BATCH_SIZE, valid=0.1)
+    trainloader, testloader = create_tasks(trainset, testset, BATCH_SIZE)
 
     model = CVAE(INPUT_DIM, HIDDEN_DIM, LATENT_DIM, N_CLASSES)
     model.to(device)
@@ -151,7 +147,7 @@ def main(epochs, batch_sz,  lr, device, prefix):
     ewc = EWC(model) 
     regularizer = None#lambda model: ewc(model, 1)
     old_task = []
-    for t in range(5):
+    for t in range(2):
         # Train loop for task t
         print('Training on task %d ....'%(t+1))
         for epoch in range(EPOCH):
@@ -164,11 +160,11 @@ def main(epochs, batch_sz,  lr, device, prefix):
             test(model, testloader[i], output_path, t, i, device)
 
         # Get EWC agent
-        # sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
-        # old_task = []
-        # for idx in sample_idx:
-        #    old_task.append(validloader[t].dataset[idx])
-        # ewc.update_FIM(old_task)
+        sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
+        old_task = []
+        for idx in sample_idx:
+           old_task.append(validloader[t].dataset[idx])
+        ewc.update_FIM(old_task)
     
     if not os.path.exists(prefix + 'generated_images/'):
         os.makedirs(prefix + 'generated_images/')
@@ -192,4 +188,4 @@ def main(epochs, batch_sz,  lr, device, prefix):
             im.save(prefix + "generated_images/{}_{}.png".format(str(c), str(j)))
         
 if __name__ == '__main__':
-    main(50, 100, 1e-2, 'cuda:0', 'noreg_images/')
+    main(10, 100, 1e-3, 'cuda:0', 'noreg_images/')

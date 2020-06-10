@@ -85,6 +85,7 @@ class CVAE(nn.Module):
         self.decoder = Decoder(latent_dim, hidden_dim, input_dim, n_classes)
 
     def forward(self, x, y):
+        x = x.view(-1,28*28)
         x = torch.cat((x, y), dim=1)
         # encode
         z_mu, z_var = self.encoder(x)
@@ -100,4 +101,4 @@ class CVAE(nn.Module):
         # decode
         generated_x = self.decoder(z)
 
-        return generated_x, z_mu, z_var
+        return generated_x.view(-1,1,28,28), z_mu, z_var
