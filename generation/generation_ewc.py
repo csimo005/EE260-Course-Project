@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
-from ewc2 import EWC
+from ewc_mhe import EWC
 import numpy as np
 from dataset import *
 from gen_model import *
@@ -44,6 +44,7 @@ def train(model, optimizer, criterion, trainloader, epoch, device, regularizer=N
         running_loss += loss.item()
         if batch_idx%print_it == print_it-1:
             print("Training [%d, %d] Loss: %.4f" % (epoch+1, (batch_idx+1)*data.shape[0], running_loss/print_it))
+            running_loss = 0.
     return
     
 def test(model, testloader, save_prefix, learned, testing, device):
@@ -92,9 +93,9 @@ def collate(samples):
     return img, lbl
 
 def VAE_loss(x, reconstructed_x, mean, log_var):
-    RCL = F.binary_cross_entropy(reconstructed_x, x, reduction='sum')
+    RCL = F.binary_cross_entropy(reconstructed_x, x, reduction='mean')
     # kl divergence loss
-    KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+    KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())/x.shape[0]
 
     return RCL + KLD
 
@@ -126,7 +127,7 @@ def create_tasks(trainset, testset, batch_sz, valid=0.1):
 
     return trainloader, validloader, testloader
 
-def main(epochs, batch_sz,  lr, device):
+def main(epochs, batch_sz,  lr, device, prefix):
     BATCH_SIZE = batch_sz
     EPOCH = epochs
     LR = lr
@@ -146,8 +147,9 @@ def main(epochs, batch_sz,  lr, device):
     optimizer = optim.Adam(model.parameters(), lr=LR)
     
     # Train on tasks sequentially
-    WEIGHT = 5
-    regularizer = None 
+    WEIGHT = 0.5
+    ewc = EWC(model) 
+    regularizer = None#lambda model: ewc(model, 1)
     old_task = []
     for t in range(5):
         # Train loop for task t
@@ -156,22 +158,20 @@ def main(epochs, batch_sz,  lr, device):
             train(model, optimizer, VAE_loss, trainloader[t], epoch, device, regularizer, WEIGHT)
 
         for i in range(t+1):
-            output_path = 'output_images/task_%d/task_%d' % (t+1,i+1)
+            output_path = prefix + 'task_%d/task_%d/' % (t+1,i+1)
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
-            test(model, testloader[t], output_path, t, i, device)
+            test(model, testloader[i], output_path, t, i, device)
 
         # Get EWC agent
-        sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
-        old_task = []
-        for idx in sample_idx:
-            old_task.append(validloader[t].dataset[idx])
-        reg = EWC(model, old_task)
-        regularizer = lambda m: reg(m, 2)
+        # sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
+        # old_task = []
+        # for idx in sample_idx:
+        #    old_task.append(validloader[t].dataset[idx])
+        # ewc.update_FIM(old_task)
     
-    
-    if not os.path.exists('output_images/generated_images/'):
-        os.makedirs('output_images/generated_images/')
+    if not os.path.exists(prefix + 'generated_images/'):
+        os.makedirs(prefix + 'generated_images/')
 
     model.eval()
     for c in range(10):
@@ -189,7 +189,7 @@ def main(epochs, batch_sz,  lr, device):
         for j in range(reconstructed_img.shape[0]):
             im = Image.fromarray(reconstructed_img[j])
             im = im.convert("L")
-            im.save("generated_images/{}_{}.png".format(str(c), str(j)))
+            im.save(prefix + "generated_images/{}_{}.png".format(str(c), str(j)))
         
 if __name__ == '__main__':
-    main(5, 100, 1e-3, 'cuda:0')
+    main(50, 100, 1e-2, 'cuda:0', 'noreg_images/')
