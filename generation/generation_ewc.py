@@ -116,9 +116,10 @@ def create_tasks(trainset, testset, batch_sz):
         for j in range(5):
             train_id = np.concatenate((train_id, train_idx[i*5+j]))
             test_id = np.concatenate((test_id, test_idx[i*5+j]))
+        print(train_id.shape)
         trainloader[i] = DataLoader(Subset(trainset, train_id), 
                                     batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
-        testloader[i] = DataLoader(Subset(testset, np.concatenate(tuple([test_idx[j] for j in range(i*2,(i+1)*2)]))),
+        testloader[i] = DataLoader(Subset(testset, test_id),
                                    batch_size=batch_sz, shuffle=True, num_workers=2, collate_fn=collate)
 
     return trainloader, testloader
@@ -145,7 +146,7 @@ def main(epochs, batch_sz,  lr, device, prefix):
     # Train on tasks sequentially
     WEIGHT = 0.5
     ewc = EWC(model) 
-    regularizer = None#lambda model: ewc(model, 1)
+    regularizer = lambda model: ewc(model, 2)
     old_task = []
     for t in range(2):
         # Train loop for task t
@@ -160,10 +161,10 @@ def main(epochs, batch_sz,  lr, device, prefix):
             test(model, testloader[i], output_path, t, i, device)
 
         # Get EWC agent
-        sample_idx = random.sample(range(len(validloader[t].dataset)), 200)
+        sample_idx = random.sample(range(len(testloader[t].dataset)), 200)
         old_task = []
         for idx in sample_idx:
-           old_task.append(validloader[t].dataset[idx])
+           old_task.append(testloader[t].dataset[idx])
         ewc.update_FIM(old_task)
     
     if not os.path.exists(prefix + 'generated_images/'):
@@ -188,4 +189,4 @@ def main(epochs, batch_sz,  lr, device, prefix):
             im.save(prefix + "generated_images/{}_{}.png".format(str(c), str(j)))
         
 if __name__ == '__main__':
-    main(10, 100, 1e-3, 'cuda:0', 'noreg_images/')
+    main(25, 100, 1e-3, 'cuda:0', 'ewc_mhe_images/')
